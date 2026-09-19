@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::*;
 use egui::{Color32, TextStyle};
 use crate::{
-    command::{CommandRegistry, CommandResult}, style_sheet::{
+    command::CommandResult, file_system::{CommandFn, CommandRegistry}, style_sheet::{
         BACKGROUND_COLOR, BACKGROUND_CORNER_RADIUS, PROMPT_TEXT_COLOR, SELECTION_COLOR,
         TEXT_COLOR, TEXT_STYLE,
     },
@@ -76,11 +76,11 @@ impl Terminal {
         let command: &str = parts[0];
         let args: &[&str] = &parts[1..];
 
-        let command_function_option = world
+        let command_function_option: Option<CommandFn> = world
             .get_resource::<CommandRegistry>()
             .and_then(|registry| registry.commands.get(command).copied());
 
-        let Some(command_function) = command_function_option else {
+        let Some(command_function): Option<CommandFn> = command_function_option else {
             let unhandled_arguments: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             return CommandResult::Unhandled(command.to_string(), unhandled_arguments);
         };
@@ -132,10 +132,10 @@ impl Terminal {
                                 );
                             }
 
-                            let string_after_escape = &remaining[escape_sequence_start_index + 2..];
-                            let Some(letter_m_index) = string_after_escape.find('m') else { break; };
+                            let string_after_escape: &str = &remaining[escape_sequence_start_index + 2..];
+                            let Some(letter_m_index): Option<usize> = string_after_escape.find('m') else { break; };
                             
-                            let codes = &string_after_escape[..letter_m_index];
+                            let codes: &str = &string_after_escape[..letter_m_index];
                             for code_part in codes.split(';') {
                                 crate::style_sheet::apply_ansi_code(
                                     code_part,

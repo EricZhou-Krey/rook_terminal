@@ -1,10 +1,10 @@
-use bevy_ecs::{reflect::AppTypeRegistry, world::World};
+use bevy_ecs::{entity::Entity, reflect::AppTypeRegistry, world::World};
 use rook_terminal::{
     command::{
-        CatCommand, CdCommand, ClearCommand, Command, CommandRegistry, HelpCommand, LsCommand,
-        PwdCommand,
+        CatCommand, CdCommand, ClearCommand, Command, HelpCommand, LsCommand, PwdCommand,
+        RookCommand,
     },
-    file_system::{FileName, VFSChildren, VFSDirectory, VFSParent, VFSTextFile},
+    file_system::{Binary, CommandRegistry, Text, VFSChildren, VFSName, VFSQueryChildren},
     Terminal,
 };
 
@@ -23,44 +23,68 @@ impl TerminalApp {
         registry.register::<LsCommand>();
         registry.register::<CdCommand>();
         registry.register::<CatCommand>();
+        registry.register::<RookCommand>();
         registry.register::<HelpCommand>();
         world.insert_resource(registry);
 
         world.insert_resource(AppTypeRegistry::default());
 
-        let root_entity = world
+        let entities_directory: Entity = world
             .spawn((
-                FileName("".to_string()),
-                VFSDirectory,
-                VFSChildren::default(),
+                VFSName {
+                    name: ".entities".to_string(),
+                },
+                VFSQueryChildren {
+                    required_components: Vec::new(),
+                },
             ))
             .id();
 
-        let readme_entity = world
+        let test_text: Entity = world
             .spawn((
-                FileName("readme.txt".to_string()),
-                VFSTextFile("README lol!, bird larping frfr".to_string()),
-                VFSParent(root_entity),
+                VFSName {
+                    name: "test_readme.txt".to_string(),
+                },
+                Text {
+                    text: "this is some testing informations".to_string(),
+                },
             ))
             .id();
 
-        let bird_dir_entity = world
+        let test_binary: Entity = world
             .spawn((
-                FileName("bird".to_string()),
-                VFSDirectory,
-                VFSChildren(vec![readme_entity]),
-                VFSParent(root_entity),
+                VFSName {
+                    name: "test_binary.bin".to_string(),
+                },
+                Binary {
+                    binary: vec![123, 124, 21, 21, 42, 135, 25, 45, 24, 124],
+                },
             ))
             .id();
 
-        world
-            .entity_mut(root_entity)
-            .get_mut::<VFSChildren>()
-            .unwrap()
-            .0
-            .push(bird_dir_entity);
+        let test_directory: Entity = world
+            .spawn((
+                VFSName {
+                    name: "test".to_string(),
+                },
+                VFSChildren {
+                    children: vec![test_text, test_binary],
+                },
+            ))
+            .id();
 
-        let mut terminal = Terminal::new(root_entity);
+        let root_directory_entity: Entity = world
+            .spawn((
+                VFSName {
+                    name: "".to_string(),
+                },
+                VFSChildren {
+                    children: vec![entities_directory, test_directory],
+                },
+            ))
+            .id();
+
+        let mut terminal = Terminal::new(root_directory_entity);
 
         HelpCommand::execute(&mut terminal, &mut world, &[]);
 
