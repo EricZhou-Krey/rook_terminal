@@ -1,10 +1,7 @@
-use bevy_ecs::{entity::Entity, reflect::AppTypeRegistry, world::World};
+use bevy_ecs::{entity::Entity, world::World};
 use rook_terminal::{
-    command::{
-        CatCommand, CdCommand, ClearCommand, Command, HelpCommand, LsCommand, PwdCommand,
-        RookCommand,
-    },
-    file_system::{Binary, CommandRegistry, Text, VFSChildren, VFSName, VFSQueryChildren},
+    command::{Command, HelpCommand},
+    file_system::{Binary, Text, VFSChildren, VFSName},
     Terminal,
 };
 
@@ -16,29 +13,7 @@ pub struct TerminalApp {
 impl TerminalApp {
     pub fn example() -> Self {
         let mut world = World::new();
-
-        let mut registry = CommandRegistry::default();
-        registry.register::<ClearCommand>();
-        registry.register::<PwdCommand>();
-        registry.register::<LsCommand>();
-        registry.register::<CdCommand>();
-        registry.register::<CatCommand>();
-        registry.register::<RookCommand>();
-        registry.register::<HelpCommand>();
-        world.insert_resource(registry);
-
-        world.insert_resource(AppTypeRegistry::default());
-
-        let entities_directory: Entity = world
-            .spawn((
-                VFSName {
-                    name: ".entities".to_string(),
-                },
-                VFSQueryChildren {
-                    required_components: Vec::new(),
-                },
-            ))
-            .id();
+        world.insert_resource(Terminal::base_command_registry());
 
         let test_text: Entity = world
             .spawn((
@@ -73,18 +48,12 @@ impl TerminalApp {
             ))
             .id();
 
-        let root_directory_entity: Entity = world
-            .spawn((
-                VFSName {
-                    name: "".to_string(),
-                },
-                VFSChildren {
-                    children: vec![entities_directory, test_directory],
-                },
-            ))
-            .id();
+        let root: Entity = Terminal::base_root_entity(&mut world);
+        let mut root_children: bevy_ecs::world::Mut<'_, VFSChildren> =
+            world.get_mut::<VFSChildren>(root).unwrap();
+        root_children.children.push(test_directory);
 
-        let mut terminal = Terminal::new(root_directory_entity);
+        let mut terminal = Terminal::new(root);
 
         HelpCommand::execute(&mut terminal, &mut world, &[]);
 

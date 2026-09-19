@@ -75,7 +75,6 @@ impl LsFlags {
 }
 
 pub struct LsCommand;
-
 impl LsCommand {
     fn parse_flags(args: &[&str]) -> HashSet<LsFlags> {
         args.iter()
@@ -397,7 +396,6 @@ impl CatFlags {
 }
 
 pub struct CatCommand;
-
 impl CatCommand {
     fn parse_flags(args: &[&str]) -> HashSet<CatFlags> {
         args.iter()

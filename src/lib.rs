@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::*;
 use egui::{Color32, TextStyle};
 use crate::{
-    command::CommandResult, file_system::{CommandFn, CommandRegistry}, style_sheet::{
+    command::{CatCommand, CdCommand, ClearCommand, CommandResult, HelpCommand, LsCommand, PwdCommand, RookCommand}, file_system::{CommandFn, CommandRegistry, VFSChildren, VFSFilterExt, VFSName, VFSQueryChildren}, style_sheet::{
         BACKGROUND_COLOR, BACKGROUND_CORNER_RADIUS, PROMPT_TEXT_COLOR, SELECTION_COLOR,
         TEXT_COLOR, TEXT_STYLE,
     },
@@ -46,6 +46,8 @@ pub struct Terminal {
     pub root_entity: Entity,
 }
 
+
+
 impl Terminal {
     pub fn new(root_entity: Entity) -> Self {
         Self {
@@ -58,6 +60,59 @@ impl Terminal {
             root_entity,
         }
     }
+
+    pub fn base_command_registry() -> CommandRegistry {
+        let mut registry = CommandRegistry::default();
+        registry.register::<ClearCommand>();
+        registry.register::<PwdCommand>();
+        registry.register::<LsCommand>();
+        registry.register::<CdCommand>();
+        registry.register::<CatCommand>();
+        registry.register::<RookCommand>();
+        registry.register::<HelpCommand>();
+        registry
+    }
+
+    pub fn base_root_entity(world: &mut World) -> Entity {
+        let entities_directory: Entity = world
+            .spawn((
+                VFSName {
+                    name: ".entities".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: !file_system::DynamicFilter::Never
+                },
+            ))
+            .id();
+        
+        let vfs_entities_directory: Entity = world
+            .spawn((
+                VFSName {
+                    name: ".vfs_entities".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: world.filter::<VFSName>() | world.filter::<CommandRegistry>(),
+                }
+            ))
+            .id();
+        
+
+        let non_vfs_entities_directory: Entity = world
+            .spawn((
+                VFSName {
+                    name: ".app_entities".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: !(world.filter::<VFSName>() | world.filter::<CommandRegistry>()),
+                }
+            ))
+            .id();
+
+        world.spawn((
+            VFSName { name: "root".to_string() },
+            VFSChildren { children: vec![entities_directory, vfs_entities_directory, non_vfs_entities_directory] },
+        )).id()
+    } 
 
     pub fn execute_command(&mut self, world: &mut World, raw_command: &str) -> CommandResult {
         let prompt: String = format!(

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, ops::{BitAnd, BitOr, Not}};
 use bevy_ecs::{archetype::{Archetype, ArchetypeEntity}, component::ComponentId, prelude::*};
 use crate::{Terminal, command::{CommandResult, Command}};
 
@@ -11,8 +11,66 @@ pub struct VFSParent { pub parent: Entity }
 #[derive(Component, Default)]
 pub struct VFSChildren { pub children: Vec<Entity> }
 
+#[derive(Clone, Debug)]
+pub enum DynamicFilter {
+    Has(ComponentId),
+    And(Vec<DynamicFilter>),
+    Or(Vec<DynamicFilter>),
+    Not(Box<DynamicFilter>),
+    Never,
+}
+
+pub trait VFSFilterExt {
+    fn filter<T: Component>(&self) -> DynamicFilter;
+}
+
+impl VFSFilterExt for World {
+    fn filter<T: Component>(&self) -> DynamicFilter {
+        match self.component_id::<T>() {
+            Some(id) => DynamicFilter::Has(id),
+            None => DynamicFilter::Never,
+        }
+    }
+}
+
+impl BitAnd for DynamicFilter {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        DynamicFilter::And(vec![self, rhs])
+    }
+}
+
+impl BitOr for DynamicFilter {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        DynamicFilter::Or(vec![self, rhs])
+    }
+}
+
+impl Not for DynamicFilter {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        if let DynamicFilter::Not(inner) = self {
+            return *inner;
+        }
+        DynamicFilter::Not(Box::new(self))
+    }
+}
+
+impl DynamicFilter {
+    pub fn matches_archetype(&self, archetype: &Archetype) -> bool {
+        match self {
+            DynamicFilter::Has(id) => archetype.contains(*id),
+            DynamicFilter::And(filters) => filters.iter().all(|f| f.matches_archetype(archetype)),
+            DynamicFilter::Or(filters) => filters.iter().any(|f| f.matches_archetype(archetype)),
+            DynamicFilter::Not(filter) => !filter.matches_archetype(archetype),
+            DynamicFilter::Never => false,
+        }
+    }
+}
+
 #[derive(Component)]
-pub struct VFSQueryChildren { pub required_components: Vec<ComponentId> }
+pub struct VFSQueryChildren { pub filter: DynamicFilter }
 
 #[derive(Component)]
 pub struct Text { pub text: String }
@@ -64,8 +122,8 @@ impl ECSFileSystem {
         
         if let Some(vfs_query_children) = world.get::<VFSQueryChildren>(directory) {
             let entities: Vec<Entity> = world.archetypes().iter()
-                .filter(|&archtype: &&Archetype|
-                    vfs_query_children.required_components.iter().all(|&id: &ComponentId| archtype.contains(id))
+                .filter(|&archetype: &&Archetype|
+                    vfs_query_children.filter.matches_archetype(archetype)
                 )
                 .flat_map(|archetype: &Archetype| archetype.entities())
                 .map(|archetype_entity: &ArchetypeEntity| archetype_entity.id())
