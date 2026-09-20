@@ -1,19 +1,26 @@
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{
+    entity::Entity,
+    schedule::Schedule,
+    world::{Mut, World},
+};
 use rook_terminal::{
     command::{Command, CommandResult, HelpCommand},
     file_system::{Binary, Text, VFSChildren, VFSName},
-    Terminal,
+    Terminal, TerminalScheduleExtension, TerminalWorldExtension,
 };
 
 pub struct TerminalApp {
-    pub terminal: Terminal,
     pub world: World,
+    pub schedule: Schedule,
 }
 
 impl TerminalApp {
     pub fn example() -> Self {
         let mut world = World::new();
-        world.insert_resource(Terminal::base_command_registry());
+        let mut schedule: Schedule = Schedule::default();
+
+        world.setup_terminal();
+        schedule.setup_terminal();
 
         let test_text: Entity = world
             .spawn((
@@ -48,24 +55,33 @@ impl TerminalApp {
             ))
             .id();
 
-        let root: Entity = Terminal::base_root_entity(&mut world);
-        let mut root_children: bevy_ecs::world::Mut<'_, VFSChildren> =
-            world.get_mut::<VFSChildren>(root).unwrap();
-        root_children.children.push(test_directory);
+        let root_entity: Entity = world.resource::<Terminal>().root_entity;
 
-        let mut terminal = Terminal::new(root);
-        let command_result: CommandResult = HelpCommand::execute(&mut terminal, &mut world, &[]);
-        terminal.push_command_result(&command_result);
+        if let Some(mut vfs_children) = world.get_mut::<VFSChildren>(root_entity) {
+            vfs_children.children.push(test_directory);
+        }
 
-        Self { terminal, world }
+        let command_result: CommandResult = HelpCommand::execute(&mut world, &[]);
+        world
+            .resource_mut::<Terminal>()
+            .push_command_result(&command_result);
+
+        Self { world, schedule }
     }
 }
 
 impl eframe::App for TerminalApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            self.terminal.ui(ui, &mut self.world);
+            self.world
+                .resource_scope(|_world: &mut World, mut terminal: Mut<Terminal>| {
+                    terminal.ui(ui);
+                });
         });
+    }
+
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.schedule.run(&mut self.world);
     }
 }
 

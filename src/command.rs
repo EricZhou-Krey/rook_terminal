@@ -13,7 +13,7 @@ pub enum CommandResult {
 
 pub trait Command {
     fn name() -> &'static str;
-    fn execute(terminal: &mut Terminal, world: &mut World, args: &[&str]) -> CommandResult;
+    fn execute(world: &mut World, args: &[&str]) -> CommandResult;
 }
 
 pub struct ClearCommand;
@@ -21,7 +21,8 @@ impl Command for ClearCommand {
     fn name() -> &'static str {
         "clear"
     }
-    fn execute(terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
+    fn execute(world: &mut World, _args: &[&str]) -> CommandResult {
+        let mut terminal: Mut<'_, Terminal> = world.resource_mut::<Terminal>();
         terminal.history.clear();
         CommandResult::Handled(None)
     }
@@ -32,7 +33,8 @@ impl Command for PwdCommand {
     fn name() -> &'static str {
         "pwd"
     }
-    fn execute(terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
+    fn execute(world: &mut World, _args: &[&str]) -> CommandResult {
+        let terminal: Mut<'_, Terminal> = world.resource_mut::<Terminal>();
         let path: String = format!("/{}", terminal.current_directory.join("/"));
         CommandResult::Handled(Some(path))
     }
@@ -265,7 +267,9 @@ impl Command for LsCommand {
         "ls"
     }
 
-    fn execute(terminal: &mut Terminal, world: &mut World, args: &[&str]) -> CommandResult {
+    fn execute(world: &mut World, args: &[&str]) -> CommandResult {
+        let root_entity: Entity = world.resource_mut::<Terminal>().root_entity;
+
         let mut flags: HashSet<LsFlags> = Self::parse_flags(args);
         let directory_paths: Vec<&str> = Self::parse_paths(args);
 
@@ -280,9 +284,7 @@ impl Command for LsCommand {
         let mut final_messages: Vec<String> = Vec::new();
 
         for path in directory_paths {
-            if let Some(target_entity) =
-                ECSFileSystem::resolve_path(terminal.root_entity, world, path)
-            {
+            if let Some(target_entity) = ECSFileSystem::resolve_path(root_entity, world, path) {
                 queue.push_back((path.to_string(), target_entity));
             } else {
                 final_messages.push(format!(
@@ -358,19 +360,24 @@ impl Command for CdCommand {
         "cd"
     }
 
-    fn execute(terminal: &mut Terminal, world: &mut World, args: &[&str]) -> CommandResult {
+    fn execute(world: &mut World, args: &[&str]) -> CommandResult {
+        let (root_entity, current_directory): (Entity, Vec<String>) = {
+            let terminal = world.resource::<Terminal>();
+            (terminal.root_entity, terminal.current_directory.clone())
+        };
+
         let target: &str = Self::parse_target_path(args).unwrap_or("/");
 
-        let new_path: Vec<String> = Self::compute_new_path(&terminal.current_directory, target);
+        let new_path: Vec<String> = Self::compute_new_path(&current_directory, target);
         if let Some(target_entity) =
-            ECSFileSystem::resolve_path(terminal.root_entity, world, &new_path.join("/"))
+            ECSFileSystem::resolve_path(root_entity, world, &new_path.join("/"))
         {
             let has_children = !ECSFileSystem::children(target_entity, world).is_empty();
 
             if !has_children {
                 return CommandResult::Handled(Some(format!("cd: {}: Not a directory", target)));
             } else {
-                terminal.current_directory = new_path;
+                world.resource_mut::<Terminal>().current_directory = new_path;
             }
         } else {
             return CommandResult::Handled(Some(format!(
@@ -478,7 +485,12 @@ impl Command for CatCommand {
         "cat"
     }
 
-    fn execute(terminal: &mut Terminal, world: &mut World, args: &[&str]) -> CommandResult {
+    fn execute(world: &mut World, args: &[&str]) -> CommandResult {
+        let (root_entity, current_directory): (Entity, Vec<String>) = {
+            let terminal = world.resource::<Terminal>();
+            (terminal.root_entity, terminal.current_directory.clone())
+        };
+
         let flags: HashSet<CatFlags> = Self::parse_flags(args);
         let paths: Vec<&str> = Self::parse_paths(args);
 
@@ -489,11 +501,10 @@ impl Command for CatCommand {
         let mut output_blocks: Vec<String> = Vec::new();
 
         for path in paths {
-            let absolute_path: String =
-                Self::build_absolute_path(&terminal.current_directory, path);
+            let absolute_path: String = Self::build_absolute_path(&current_directory, path);
 
             if let Some(target_entity) =
-                ECSFileSystem::resolve_path(terminal.root_entity, world, &absolute_path)
+                ECSFileSystem::resolve_path(root_entity, world, &absolute_path)
             {
                 if let Some(text_comp) = world.get::<Text>(target_entity) {
                     output_blocks.push(Self::format_content(&text_comp.text, &flags));
@@ -525,7 +536,7 @@ impl Command for HelpCommand {
     fn name() -> &'static str {
         "help"
     }
-    fn execute(_terminal: &mut Terminal, world: &mut World, _args: &[&str]) -> CommandResult {
+    fn execute(world: &mut World, _args: &[&str]) -> CommandResult {
         let Some(registry): Option<&CommandRegistry> = world.get_resource::<CommandRegistry>()
         else {
             return CommandResult::Handled(Some(
@@ -550,7 +561,7 @@ impl Command for RookCommand {
         "rook"
     }
 
-    fn execute(_terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
+    fn execute(_world: &mut World, _args: &[&str]) -> CommandResult {
         let colored_icon: String = format!("\x1b[96m{}\x1b[0m", crate::style_sheet::ICON);
         CommandResult::Handled(Some(colored_icon))
     }

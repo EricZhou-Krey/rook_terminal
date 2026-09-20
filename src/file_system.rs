@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, ops::{BitAnd, BitOr, Not}};
 use bevy_ecs::{archetype::{Archetype, ArchetypeEntity}, component::ComponentId, prelude::*};
-use crate::{Terminal, command::{CommandResult, Command}};
+use crate::{command::{CommandResult, Command}};
 
 #[derive(Component)]
 pub struct VFSName { pub name: String }
@@ -20,11 +20,11 @@ pub enum DynamicFilter {
     Never,
 }
 
-pub trait VFSFilterExt {
+pub trait VFSFilterExtension {
     fn filter<T: Component>(&self) -> DynamicFilter;
 }
 
-impl VFSFilterExt for World {
+impl VFSFilterExtension for World {
     fn filter<T: Component>(&self) -> DynamicFilter {
         match self.component_id::<T>() {
             Some(id) => DynamicFilter::Has(id),
@@ -180,7 +180,7 @@ impl ECSFileSystem {
     }
 }
 
-pub type CommandFn = fn(&mut Terminal, &mut World, &[&str]) -> CommandResult;
+pub type CommandFn = fn(&mut World, &[&str]) -> CommandResult;
 
 #[derive(Resource, Default)]
 pub struct CommandRegistry {

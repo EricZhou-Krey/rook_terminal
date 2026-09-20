@@ -1,7 +1,7 @@
-use bevy_ecs::prelude::*;
+use bevy_ecs::{prelude::*, relationship::RelationshipSourceCollection};
 use egui::{Color32, TextStyle};
 use crate::{
-    command::{CatCommand, CdCommand, ClearCommand, CommandResult, HelpCommand, LsCommand, PwdCommand, RookCommand}, file_system::{CommandFn, CommandRegistry, VFSChildren, VFSFilterExt, VFSName, VFSQueryChildren}, style_sheet::{
+    command::{CatCommand, CdCommand, ClearCommand, CommandResult, HelpCommand, LsCommand, PwdCommand, RookCommand}, file_system::{CommandFn, CommandRegistry, VFSChildren, VFSFilterExtension, VFSName, VFSQueryChildren}, style_sheet::{
         BACKGROUND_COLOR, BACKGROUND_CORNER_RADIUS, PROMPT_TEXT_COLOR, SELECTION_COLOR,
         TEXT_COLOR, TEXT_STYLE,
     },
@@ -35,15 +35,22 @@ impl Default for TerminalStyle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Resource)]
 pub struct Terminal {
     pub history: Vec<String>,
     pub command_history: Vec<String>,
     pub history_index: usize,
     pub input: String,
+    pub pending_commands: Vec<String>,
     pub current_directory: Vec<String>,
     pub style: TerminalStyle,
     pub root_entity: Entity,
+}
+
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new(Entity::new())
+    }
 }
 
 impl Terminal {
@@ -53,64 +60,12 @@ impl Terminal {
             command_history: Vec::new(),
             history_index: 0,
             input: String::new(),
+            pending_commands: Vec::new(),
             current_directory: Vec::new(),
             style: TerminalStyle::default(),
             root_entity,
         }
     }
-
-    pub fn base_command_registry() -> CommandRegistry {
-        let mut registry = CommandRegistry::default();
-        registry.register::<ClearCommand>();
-        registry.register::<PwdCommand>();
-        registry.register::<LsCommand>();
-        registry.register::<CdCommand>();
-        registry.register::<CatCommand>();
-        registry.register::<RookCommand>();
-        registry.register::<HelpCommand>();
-        registry
-    }
-
-    pub fn base_root_entity(world: &mut World) -> Entity {
-        let entities_directory: Entity = world
-            .spawn((
-                VFSName {
-                    name: ".entities".to_string(),
-                },
-                VFSQueryChildren {
-                    filter: !file_system::DynamicFilter::Never
-                },
-            ))
-            .id();
-        
-        let vfs_entities_directory: Entity = world
-            .spawn((
-                VFSName {
-                    name: ".vfs_entities".to_string(),
-                },
-                VFSQueryChildren {
-                    filter: world.filter::<VFSName>() | world.filter::<CommandRegistry>(),
-                }
-            ))
-            .id();
-        
-
-        let non_vfs_entities_directory: Entity = world
-            .spawn((
-                VFSName {
-                    name: ".app_entities".to_string(),
-                },
-                VFSQueryChildren {
-                    filter: !(world.filter::<VFSName>() | world.filter::<CommandRegistry>()),
-                }
-            ))
-            .id();
-
-        world.spawn((
-            VFSName { name: "root".to_string() },
-            VFSChildren { children: vec![entities_directory, vfs_entities_directory, non_vfs_entities_directory] },
-        )).id()
-    } 
 
     pub fn push_command_result(&mut self, command_result: &CommandResult) {
         match command_result {
@@ -124,41 +79,7 @@ impl Terminal {
         }
     }
 
-    pub fn execute_command(&mut self, world: &mut World, raw_command: &str) -> CommandResult {
-        let prompt: String = format!(
-            "{}$ {}",
-            self.current_directory.join("/"),
-            raw_command
-        );
-        self.history.push(prompt);
-
-        let parts: Vec<&str> = raw_command.split_whitespace().collect();
-
-        if parts.is_empty() {
-            return CommandResult::Handled(None);
-        }
-
-        let command: &str = parts[0];
-        let args: &[&str] = &parts[1..];
-
-        let command_function_option: Option<CommandFn> = world
-            .get_resource::<CommandRegistry>()
-            .and_then(|registry| registry.commands.get(command).copied());
-
-        let Some(command_function): Option<CommandFn> = command_function_option else {
-            let unhandled_arguments: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-            return CommandResult::Unhandled(command.to_string(), unhandled_arguments);
-        };
-
-        let command_result: CommandResult = command_function(self, world, args);
-        self.push_command_result(&command_result);
-
-        command_result
-    }
-
-    pub fn ui(&mut self, ui: &mut egui::Ui, world: &mut World) -> Option<CommandResult> {
-        let mut final_command_result: Option<CommandResult> = None;
-
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
         let mut style: egui::Style = (**ui.style()).clone();
         style.visuals.override_text_color = Some(self.style.text_color);
         style.visuals.selection.bg_fill = self.style.selection_color;
@@ -291,11 +212,7 @@ impl Terminal {
                         if !command.trim().is_empty() {
                             self.command_history.push(command.clone());
                             
-                            let exec_result = self.execute_command(world, &command);
-
-                            if let CommandResult::Unhandled(..) = exec_result {
-                                final_command_result = Some(exec_result);
-                            }
+                            self.pending_commands.push(command);
                         }
                         
                         self.history_index = self.command_history.len();
@@ -303,7 +220,117 @@ impl Terminal {
                     }
                 });
             });
+    }
+}
 
-        final_command_result
+pub fn execute_commands(world: &mut World) {
+    let commands_to_run: Vec<String> = {
+        let mut terminal = world.resource_mut::<Terminal>();
+        std::mem::take(&mut terminal.pending_commands)
+    };
+
+    for raw_command in commands_to_run {
+        {
+            let mut terminal: Mut<'_, Terminal> = world.resource_mut::<Terminal>();
+            let prompt: String = format!("{}$ {}", terminal.current_directory.join("/"), raw_command);
+            terminal.history.push(prompt);
+        }
+
+        let parts: Vec<&str> = raw_command.split_whitespace().collect();
+        if parts.is_empty() { continue; }
+
+        let command: &str = parts[0];
+        let args: &[&str] = &parts[1..];
+
+        let command_function_option: Option<CommandFn> = {
+            let registry = world.resource::<CommandRegistry>();
+            registry.commands.get(command).copied()
+        };
+
+        let result: CommandResult = match command_function_option {
+            Some(func) => func(world, args),
+            None => CommandResult::Unhandled(command.to_string(), args.iter().map(|s| s.to_string()).collect()),
+        };
+
+        world.resource_mut::<Terminal>().push_command_result(&result);
+    }
+}
+
+
+pub trait TerminalWorldExtension {
+    fn setup_terminal(&mut self) -> &mut Self;
+}
+
+impl TerminalWorldExtension for World {
+    fn setup_terminal(&mut self) -> &mut Self {
+        self.register_component::<VFSName>();
+        self.register_component::<CommandRegistry>();
+        self.register_component::<Terminal>();
+
+        let mut command_registry = CommandRegistry::default();
+        command_registry.register::<ClearCommand>();
+        command_registry.register::<PwdCommand>();
+        command_registry.register::<LsCommand>();
+        command_registry.register::<CdCommand>();
+        command_registry.register::<CatCommand>();
+        command_registry.register::<RookCommand>();
+        command_registry.register::<HelpCommand>();
+        
+        self.insert_resource(command_registry);
+
+        let entities_directory: Entity = self
+            .spawn((
+                VFSName {
+                    name: ".entities".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: !file_system::DynamicFilter::Never
+                },
+            ))
+            .id();
+        
+        let vfs_entities_directory: Entity = self
+            .spawn((
+                VFSName {
+                    name: ".vfs_entities".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: self.filter::<VFSName>() | self.filter::<CommandRegistry>() | self.filter::<Terminal>(),
+                }
+            ))
+            .id();
+        
+
+        let non_vfs_entities_directory: Entity = self
+            .spawn((
+                VFSName {
+                    name: ".app_entities".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: !(self.filter::<VFSName>() | self.filter::<CommandRegistry>() | self.filter::<Terminal>()),
+                }
+            ))
+            .id();
+
+        let root_entity: Entity = self.spawn((
+            VFSName { name: "root".to_string() },
+            VFSChildren { children: vec![entities_directory, vfs_entities_directory, non_vfs_entities_directory] },
+        )).id();
+
+        let terminal: Terminal = Terminal::new(root_entity);
+        self.insert_resource(terminal);
+
+        self
+    }
+}
+
+pub trait TerminalScheduleExtension {
+    fn setup_terminal(&mut self) -> &mut Self;
+}
+
+impl TerminalScheduleExtension for Schedule {
+    fn setup_terminal(&mut self) -> &mut Self {
+        self.add_systems(execute_commands);
+        self
     }
 }
