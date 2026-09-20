@@ -46,8 +46,6 @@ pub struct Terminal {
     pub root_entity: Entity,
 }
 
-
-
 impl Terminal {
     pub fn new(root_entity: Entity) -> Self {
         Self {
