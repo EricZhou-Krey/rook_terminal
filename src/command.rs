@@ -7,7 +7,7 @@ use std::str::Chars;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandResult {
-    Handled,
+    Handled(Option<String>),
     Unhandled(String, Vec<String>),
 }
 
@@ -23,7 +23,7 @@ impl Command for ClearCommand {
     }
     fn execute(terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
         terminal.history.clear();
-        CommandResult::Handled
+        CommandResult::Handled(None)
     }
 }
 
@@ -34,8 +34,7 @@ impl Command for PwdCommand {
     }
     fn execute(terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
         let path: String = format!("/{}", terminal.current_directory.join("/"));
-        terminal.history.push(path);
-        CommandResult::Handled
+        CommandResult::Handled(Some(path))
     }
 }
 
@@ -276,7 +275,9 @@ impl Command for LsCommand {
 
         let mut queue: VecDeque<(String, Entity)> = VecDeque::new();
         let mut visited: HashSet<Entity> = HashSet::new();
+
         let mut all_directory_outputs: Vec<String> = Vec::new();
+        let mut final_messages: Vec<String> = Vec::new();
 
         for path in directory_paths {
             if let Some(target_entity) =
@@ -284,7 +285,7 @@ impl Command for LsCommand {
             {
                 queue.push_back((path.to_string(), target_entity));
             } else {
-                terminal.history.push(format!(
+                final_messages.push(format!(
                     "ls: cannot access '{}': No such file or directory",
                     path
                 ));
@@ -312,10 +313,14 @@ impl Command for LsCommand {
         }
 
         if !all_directory_outputs.is_empty() {
-            terminal.history.push(all_directory_outputs.join("\n\n"));
+            final_messages.push(all_directory_outputs.join("\n\n"));
         }
 
-        CommandResult::Handled
+        if !final_messages.is_empty() {
+            CommandResult::Handled(Some(final_messages.join("\n")))
+        } else {
+            CommandResult::Handled(None)
+        }
     }
 }
 
@@ -363,19 +368,18 @@ impl Command for CdCommand {
             let has_children = !ECSFileSystem::children(target_entity, world).is_empty();
 
             if !has_children {
-                terminal
-                    .history
-                    .push(format!("cd: {}: Not a directory", target));
+                return CommandResult::Handled(Some(format!("cd: {}: Not a directory", target)));
             } else {
                 terminal.current_directory = new_path;
             }
         } else {
-            terminal
-                .history
-                .push(format!("cd: {}: No such file or directory", target));
+            return CommandResult::Handled(Some(format!(
+                "cd: {}: No such file or directory",
+                target
+            )));
         }
 
-        CommandResult::Handled
+        CommandResult::Handled(None)
     }
 }
 
@@ -479,8 +483,7 @@ impl Command for CatCommand {
         let paths: Vec<&str> = Self::parse_paths(args);
 
         if paths.is_empty() {
-            terminal.history.push("cat: missing operand".to_string());
-            return CommandResult::Handled;
+            return CommandResult::Handled(Some("cat: missing operand".to_string()));
         }
 
         let mut output_blocks: Vec<String> = Vec::new();
@@ -510,10 +513,10 @@ impl Command for CatCommand {
         }
 
         if !output_blocks.is_empty() {
-            terminal.history.push(output_blocks.join("\n"));
+            CommandResult::Handled(Some(output_blocks.join("\n")))
+        } else {
+            CommandResult::Handled(None)
         }
-
-        CommandResult::Handled
     }
 }
 
@@ -522,25 +525,22 @@ impl Command for HelpCommand {
     fn name() -> &'static str {
         "help"
     }
-    fn execute(terminal: &mut Terminal, world: &mut World, _args: &[&str]) -> CommandResult {
+    fn execute(_terminal: &mut Terminal, world: &mut World, _args: &[&str]) -> CommandResult {
         let Some(registry): Option<&CommandRegistry> = world.get_resource::<CommandRegistry>()
         else {
-            terminal.history.push(
+            return CommandResult::Handled(Some(
                 "Error: CommandRegistry missing from World, ensure this is the cpu world"
                     .to_string(),
-            );
-            return CommandResult::Handled;
+            ));
         };
 
         let mut command_names: Vec<String> = registry.commands.keys().cloned().collect();
         command_names.sort();
 
-        terminal.history.push(format!(
+        CommandResult::Handled(Some(format!(
             "Available built-in commands: {}",
             command_names.join(", ")
-        ));
-
-        CommandResult::Handled
+        )))
     }
 }
 
@@ -550,9 +550,8 @@ impl Command for RookCommand {
         "rook"
     }
 
-    fn execute(terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
+    fn execute(_terminal: &mut Terminal, _world: &mut World, _args: &[&str]) -> CommandResult {
         let colored_icon: String = format!("\x1b[96m{}\x1b[0m", crate::style_sheet::ICON);
-        terminal.history.push(colored_icon);
-        CommandResult::Handled
+        CommandResult::Handled(Some(colored_icon))
     }
 }

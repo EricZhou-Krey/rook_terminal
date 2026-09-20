@@ -1,6 +1,6 @@
 use bevy_ecs::{entity::Entity, world::World};
 use rook_terminal::{
-    command::{Command, HelpCommand},
+    command::{Command, CommandResult, HelpCommand},
     file_system::{Binary, Text, VFSChildren, VFSName},
     Terminal,
 };
@@ -54,8 +54,8 @@ impl TerminalApp {
         root_children.children.push(test_directory);
 
         let mut terminal = Terminal::new(root);
-
-        HelpCommand::execute(&mut terminal, &mut world, &[]);
+        let command_result: CommandResult = HelpCommand::execute(&mut terminal, &mut world, &[]);
+        terminal.push_command_result(&command_result);
 
         Self { terminal, world }
     }

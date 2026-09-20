@@ -112,6 +112,18 @@ impl Terminal {
         )).id()
     } 
 
+    pub fn push_command_result(&mut self, command_result: &CommandResult) {
+        match command_result {
+            CommandResult::Handled(Some(output)) => {
+                self.history.push(output.clone());
+            }
+            CommandResult::Handled(None) => {}
+            CommandResult::Unhandled(cmd, _) => {
+                self.history.push(format!("command not found: {}", cmd));
+            }
+        }
+    }
+
     pub fn execute_command(&mut self, world: &mut World, raw_command: &str) -> CommandResult {
         let prompt: String = format!(
             "{}$ {}",
@@ -123,7 +135,7 @@ impl Terminal {
         let parts: Vec<&str> = raw_command.split_whitespace().collect();
 
         if parts.is_empty() {
-            return CommandResult::Handled;
+            return CommandResult::Handled(None);
         }
 
         let command: &str = parts[0];
@@ -138,7 +150,10 @@ impl Terminal {
             return CommandResult::Unhandled(command.to_string(), unhandled_arguments);
         };
 
-        command_function(self, world, args)
+        let command_result: CommandResult = command_function(self, world, args);
+        self.push_command_result(&command_result);
+
+        command_result
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, world: &mut World) -> Option<CommandResult> {
