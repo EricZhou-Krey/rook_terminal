@@ -1,5 +1,3 @@
-![Rook Logo](assets/DevIcon.png)
-
 # rook_terminal
 ---
 
