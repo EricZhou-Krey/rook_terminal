@@ -1,7 +1,7 @@
-use bevy_ecs::{prelude::*, relationship::RelationshipSourceCollection};
+use bevy_ecs::{prelude::*, system::{Commands, Res, ResMut}, relationship::RelationshipSourceCollection};
 use egui::{Color32, TextStyle};
 use crate::{
-    command::{CatCommand, CdCommand, ClearCommand, CommandResult, HelpCommand, LsCommand, PwdCommand, RookCommand}, file_system::{CommandFn, CommandRegistry, VFSChildren, VFSFilterExtension, VFSName, VFSQueryChildren}, style_sheet::{
+    command::{CatCommand, CdCommand, ClearCommand, CommandResult, HelpCommand, LsCommand, PwdCommand, RookCommand}, file_system::{CommandRegistry, VFSChildren, VFSFilterExtension, VFSName, VFSQueryChildren}, style_sheet::{
         BACKGROUND_COLOR, BACKGROUND_CORNER_RADIUS, PROMPT_TEXT_COLOR, SELECTION_COLOR,
         TEXT_COLOR, TEXT_STYLE,
     },
@@ -10,7 +10,6 @@ use crate::{
 pub mod command;
 pub mod file_system;
 pub mod style_sheet;
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalStyle {
@@ -35,13 +34,17 @@ impl Default for TerminalStyle {
     }
 }
 
+#[derive(Event)]
+pub struct TerminalCommandEvent {
+    pub raw_command: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Resource)]
 pub struct Terminal {
     pub history: Vec<String>,
     pub command_history: Vec<String>,
     pub history_index: usize,
     pub input: String,
-    pub pending_commands: Vec<String>,
     pub current_directory: Vec<String>,
     pub style: TerminalStyle,
     pub root_entity: Entity,
@@ -60,7 +63,6 @@ impl Terminal {
             command_history: Vec::new(),
             history_index: 0,
             input: String::new(),
-            pending_commands: Vec::new(),
             current_directory: Vec::new(),
             style: TerminalStyle::default(),
             root_entity,
@@ -73,13 +75,15 @@ impl Terminal {
                 self.history.push(output.clone());
             }
             CommandResult::Handled(None) => {}
-            CommandResult::Unhandled(cmd, _) => {
-                self.history.push(format!("command not found: {}", cmd));
+            CommandResult::Unhandled(command_name, _) => {
+                self.history.push(format!("command not found: {}", command_name));
             }
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui) {
+    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<TerminalCommandEvent> {
+        let mut input_command: Option<TerminalCommandEvent> = None;
+
         let mut style: egui::Style = (**ui.style()).clone();
         style.visuals.override_text_color = Some(self.style.text_color);
         style.visuals.selection.bg_fill = self.style.selection_color;
@@ -151,8 +155,8 @@ impl Terminal {
 
                 let mut terminal_clicked: bool = false;
                 ui.input(|input: &egui::InputState| {
-                    if input.pointer.primary_clicked() && let Some(pos) = input.pointer.interact_pos() {
-                        terminal_clicked = terminal_rect.contains(pos);
+                    if input.pointer.primary_clicked() && let Some(position) = input.pointer.interact_pos() {
+                        terminal_clicked = terminal_rect.contains(position);
                     }
                 });
 
@@ -179,15 +183,15 @@ impl Terminal {
                     }
 
                     if response.has_focus() {
-                        let mut move_cursor_to_end = false;
+                        let mut move_cursor_to_end: bool = false;
 
-                        horizontal_ui.input(|input| {
-                            if input.key_pressed(egui::Key::ArrowUp) && self.history_index > 0 {
+                        horizontal_ui.input(|input_state: &egui::InputState| {
+                            if input_state.key_pressed(egui::Key::ArrowUp) && self.history_index > 0 {
                                 self.history_index -= 1;
                                 self.input = self.command_history[self.history_index].clone();
                                 move_cursor_to_end = true;
                             }
-                            if input.key_pressed(egui::Key::ArrowDown) && self.history_index < self.command_history.len() {
+                            if input_state.key_pressed(egui::Key::ArrowDown) && self.history_index < self.command_history.len() {
                                 self.history_index += 1;
                                 if self.history_index < self.command_history.len() {
                                     self.input = self.command_history[self.history_index].clone();
@@ -198,21 +202,20 @@ impl Terminal {
                             }
                         });
 
-                        if move_cursor_to_end && let Some(mut state) = egui::TextEdit::load_state(horizontal_ui.ctx(), response.id) {
-                            let ccursor = egui::text::CCursor::new(self.input.chars().count());
-                            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
-                            state.store(horizontal_ui.ctx(), response.id);
+                        if move_cursor_to_end && let Some(mut text_edit_state) = egui::TextEdit::load_state(horizontal_ui.ctx(), response.id) {
+                            let character_cursor: egui::text::CCursor = egui::text::CCursor::new(self.input.chars().count());
+                            text_edit_state.cursor.set_char_range(Some(egui::text::CCursorRange::one(character_cursor)));
+                            text_edit_state.store(horizontal_ui.ctx(), response.id);
                         }
                     }
 
-                    if response.lost_focus() && horizontal_ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    if response.lost_focus() && horizontal_ui.input(|input_state: &egui::InputState| input_state.key_pressed(egui::Key::Enter)) {
                         let command: String = self.input.clone();
                         self.input.clear();
 
                         if !command.trim().is_empty() {
                             self.command_history.push(command.clone());
-                            
-                            self.pending_commands.push(command);
+                            input_command = Some(TerminalCommandEvent { raw_command: command });
                         }
                         
                         self.history_index = self.command_history.len();
@@ -220,42 +223,33 @@ impl Terminal {
                     }
                 });
             });
+
+        input_command
     }
 }
 
-pub fn execute_commands(world: &mut World) {
-    let commands_to_run: Vec<String> = {
-        let mut terminal = world.resource_mut::<Terminal>();
-        std::mem::take(&mut terminal.pending_commands)
-    };
+pub fn execute_command(
+    terminal_command_event: On<TerminalCommandEvent>,
+    mut terminal: ResMut<Terminal>,
+    registry: Res<CommandRegistry>,
+    mut commands: Commands,
+) {
+    let prompt: String = format!("{}$ {}", terminal.current_directory.join("/"), terminal_command_event.raw_command);
+    terminal.history.push(prompt);
 
-    for raw_command in commands_to_run {
-        {
-            let mut terminal: Mut<'_, Terminal> = world.resource_mut::<Terminal>();
-            let prompt: String = format!("{}$ {}", terminal.current_directory.join("/"), raw_command);
-            terminal.history.push(prompt);
-        }
+    let parts: Vec<&str> = terminal_command_event.raw_command.split_whitespace().collect();
+    if parts.is_empty() { return; }
 
-        let parts: Vec<&str> = raw_command.split_whitespace().collect();
-        if parts.is_empty() { continue; }
+    let command_name: &str = parts[0];
+    let arguments: Vec<String> = parts[1..].iter().map(|arg: &&str| arg.to_string()).collect();
 
-        let command: &str = parts[0];
-        let args: &[&str] = &parts[1..];
-
-        let command_function_option: Option<CommandFn> = {
-            let registry = world.resource::<CommandRegistry>();
-            registry.commands.get(command).copied()
-        };
-
-        let result: CommandResult = match command_function_option {
-            Some(func) => func(world, args),
-            None => CommandResult::Unhandled(command.to_string(), args.iter().map(|s| s.to_string()).collect()),
-        };
-
-        world.resource_mut::<Terminal>().push_command_result(&result);
+    if let Some(&system_id) = registry.commands.get(command_name) {
+        commands.run_system_with(system_id, arguments);
+    } else {
+        let unhandled_result: CommandResult = CommandResult::Unhandled(command_name.to_string(), arguments);
+        terminal.push_command_result(&unhandled_result);
     }
 }
-
 
 pub trait TerminalWorldExtension {
     fn setup_terminal(&mut self) -> &mut Self;
@@ -267,16 +261,18 @@ impl TerminalWorldExtension for World {
         self.register_component::<CommandRegistry>();
         self.register_component::<Terminal>();
 
-        let mut command_registry = CommandRegistry::default();
-        command_registry.register::<ClearCommand>();
-        command_registry.register::<PwdCommand>();
-        command_registry.register::<LsCommand>();
-        command_registry.register::<CdCommand>();
-        command_registry.register::<CatCommand>();
-        command_registry.register::<RookCommand>();
-        command_registry.register::<HelpCommand>();
+
+        let mut command_registry: CommandRegistry = CommandRegistry::default();
+        command_registry.register(ClearCommand::name(), self.register_system(ClearCommand::execute));
+        command_registry.register(PwdCommand::name(), self.register_system(PwdCommand::execute));
+        command_registry.register(LsCommand::name(), self.register_system(LsCommand::execute));
+        command_registry.register(CdCommand::name(), self.register_system(CdCommand::execute));
+        command_registry.register(CatCommand::name(), self.register_system(CatCommand::execute));
+        command_registry.register(RookCommand::name(), self.register_system(RookCommand::execute));
+        command_registry.register(HelpCommand::name(), self.register_system(HelpCommand::execute));
         
         self.insert_resource(command_registry);
+        self.add_observer(execute_command);
 
         let entities_directory: Entity = self
             .spawn((
@@ -300,7 +296,6 @@ impl TerminalWorldExtension for World {
             ))
             .id();
         
-
         let non_vfs_entities_directory: Entity = self
             .spawn((
                 VFSName {
@@ -320,17 +315,6 @@ impl TerminalWorldExtension for World {
         let terminal: Terminal = Terminal::new(root_entity);
         self.insert_resource(terminal);
 
-        self
-    }
-}
-
-pub trait TerminalScheduleExtension {
-    fn setup_terminal(&mut self) -> &mut Self;
-}
-
-impl TerminalScheduleExtension for Schedule {
-    fn setup_terminal(&mut self) -> &mut Self {
-        self.add_systems(execute_commands);
         self
     }
 }

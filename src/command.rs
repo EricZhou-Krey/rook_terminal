@@ -1,7 +1,7 @@
 use crate::file_system::{Binary, CommandRegistry, ECSFileSystem, Text};
 use crate::Terminal;
 use bevy_ecs::prelude::*;
-use bevy_ecs::world::World;
+use bevy_ecs::system::In;
 use std::collections::{HashSet, VecDeque};
 use std::str::Chars;
 
@@ -11,32 +11,25 @@ pub enum CommandResult {
     Unhandled(String, Vec<String>),
 }
 
-pub trait Command {
-    fn name() -> &'static str;
-    fn execute(world: &mut World, args: &[&str]) -> CommandResult;
-}
-
 pub struct ClearCommand;
-impl Command for ClearCommand {
-    fn name() -> &'static str {
+impl ClearCommand {
+    pub fn name() -> &'static str {
         "clear"
     }
-    fn execute(world: &mut World, _args: &[&str]) -> CommandResult {
-        let mut terminal: Mut<'_, Terminal> = world.resource_mut::<Terminal>();
+    pub fn execute(_input: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
         terminal.history.clear();
-        CommandResult::Handled(None)
+        terminal.push_command_result(&CommandResult::Handled(None));
     }
 }
 
 pub struct PwdCommand;
-impl Command for PwdCommand {
-    fn name() -> &'static str {
+impl PwdCommand {
+    pub fn name() -> &'static str {
         "pwd"
     }
-    fn execute(world: &mut World, _args: &[&str]) -> CommandResult {
-        let terminal: Mut<'_, Terminal> = world.resource_mut::<Terminal>();
+    pub fn execute(_input: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
         let path: String = format!("/{}", terminal.current_directory.join("/"));
-        CommandResult::Handled(Some(path))
+        terminal.push_command_result(&CommandResult::Handled(Some(path)));
     }
 }
 
@@ -77,12 +70,16 @@ impl LsFlags {
 
 pub struct LsCommand;
 impl LsCommand {
+    pub fn name() -> &'static str {
+        "ls"
+    }
+
     fn parse_flags(args: &[&str]) -> HashSet<LsFlags> {
         args.iter()
             .filter_map(|&arg: &&str| {
                 let mut arg_chars: Chars = arg.chars();
-                let c = arg_chars.next()?;
-                if c != '-' {
+                let character: char = arg_chars.next()?;
+                if character != '-' {
                     return None;
                 }
 
@@ -101,8 +98,8 @@ impl LsCommand {
             .iter()
             .filter_map(|&arg: &&str| {
                 let mut arg_chars: Chars = arg.chars();
-                let c = arg_chars.next()?;
-                if c == '-' {
+                let character: char = arg_chars.next()?;
+                if character == '-' {
                     return None;
                 }
                 Some(arg)
@@ -122,18 +119,18 @@ impl LsCommand {
         }
 
         let units: [&str; 4] = ["B", "K", "M", "G"];
-        let mut s: f64 = size as f64;
-        let mut u: usize = 0;
+        let mut float_size: f64 = size as f64;
+        let mut unit_index: usize = 0;
 
-        while s >= 1024.0 && u < units.len() - 1 {
-            s /= 1024.0;
-            u += 1;
+        while float_size >= 1024.0 && unit_index < units.len() - 1 {
+            float_size /= 1024.0;
+            unit_index += 1;
         }
 
-        if u == 0 {
+        if unit_index == 0 {
             format!("{size}B")
         } else {
-            format!("{:.1}{}", s, units[u])
+            format!("{:.1}{}", float_size, units[unit_index])
         }
     }
 
@@ -141,7 +138,7 @@ impl LsCommand {
         path: &str,
         target_entity: Entity,
         flags: &HashSet<LsFlags>,
-        world: &World,
+        file_system: &ECSFileSystem,
         queue: &mut VecDeque<(String, Entity)>,
     ) -> Vec<(String, Entity)> {
         if flags.contains(&LsFlags::Directory) {
@@ -152,20 +149,19 @@ impl LsCommand {
         if flags.contains(&LsFlags::ShowAll) {
             list.push((".".to_string(), target_entity));
 
-            let parent: Entity =
-                ECSFileSystem::parent(target_entity, world).unwrap_or(target_entity);
+            let parent: Entity = file_system.parent(target_entity).unwrap_or(target_entity);
             list.push(("..".to_string(), parent));
         }
 
-        let children: Vec<Entity> = ECSFileSystem::children(target_entity, world);
+        let children: Vec<Entity> = file_system.children(target_entity);
         for child in children {
-            let name: String = ECSFileSystem::entity_vfs_name(child, world);
+            let name: String = file_system.entity_vfs_name(child);
 
             if flags.contains(&LsFlags::ShowAll) || !name.starts_with('.') {
                 list.push((name.clone(), child));
 
                 if flags.contains(&LsFlags::Recursive) {
-                    let child_children: Vec<Entity> = ECSFileSystem::children(child, world);
+                    let child_children: Vec<Entity> = file_system.children(child);
                     if !child_children.is_empty() {
                         let new_path: String = if path == "." {
                             name
@@ -184,9 +180,9 @@ impl LsCommand {
         mut name: String,
         entity: Entity,
         flags: &HashSet<LsFlags>,
-        world: &World,
+        file_system: &ECSFileSystem,
     ) -> String {
-        let entity_children: Vec<Entity> = ECSFileSystem::children(entity, world);
+        let entity_children: Vec<Entity> = file_system.children(entity);
 
         if flags.contains(&LsFlags::Classify) && !entity_children.is_empty() {
             name.push('/');
@@ -198,15 +194,16 @@ impl LsCommand {
             parts.push(format!("{:>5}v{:<2}", entity.index(), entity.generation()));
         }
 
-        let size_in_bytes: usize = ECSFileSystem::compute_size(entity, world);
+        let size_in_bytes: usize = file_system.compute_size(entity);
         let mut component_names: Vec<String> = Vec::new();
 
         if flags.contains(&LsFlags::ComponentView) {
-            if let Ok(entity_ref) = world.get_entity(entity) {
-                for comp_id in entity_ref.archetype().components() {
-                    if let Some(info) = world.components().get_info(*comp_id) {
-                        let full_name: &String = &info.name().as_string();
-                        let short_name: &str = full_name.split("::").last().unwrap_or(full_name);
+            if let Ok(Some(location)) = file_system.entities.get(entity) &&
+            let Some(archetype) = file_system.archetypes.get(location.archetype_id) {
+                for component_id in archetype.components() {
+                    if let Some(info) = file_system.components.get_info(*component_id) {
+                        let full_name = info.name();
+                        let short_name = full_name.split("::").last().unwrap_or(&full_name);
                         component_names.push(short_name.to_string());
                     }
                 }
@@ -220,7 +217,7 @@ impl LsCommand {
                 Self::format_size(size_in_bytes, flags.contains(&LsFlags::HumanReadable));
 
             if flags.contains(&LsFlags::LongList) {
-                let type_char = if !entity_children.is_empty() {
+                let type_char: char = if !entity_children.is_empty() {
                     'd'
                 } else {
                     '-'
@@ -245,7 +242,7 @@ impl LsCommand {
             output_lines.reverse();
         }
 
-        let formatted_output =
+        let formatted_output: String =
             if flags.contains(&LsFlags::OnePerLine) || flags.contains(&LsFlags::LongList) {
                 output_lines.join("\n")
             } else {
@@ -260,15 +257,17 @@ impl LsCommand {
         block_output.push_str(&formatted_output);
         block_output
     }
-}
 
-impl Command for LsCommand {
-    fn name() -> &'static str {
-        "ls"
-    }
+    pub fn execute(
+        input: In<Vec<String>>,
+        mut terminal: ResMut<Terminal>,
+        file_system: ECSFileSystem,
+    ) {
+        let args_vec: Vec<String> = input.0;
+        let args_refs: Vec<&str> = args_vec.iter().map(String::as_str).collect();
+        let args: &[&str] = &args_refs;
 
-    fn execute(world: &mut World, args: &[&str]) -> CommandResult {
-        let root_entity: Entity = world.resource_mut::<Terminal>().root_entity;
+        let root_entity: Entity = terminal.root_entity;
 
         let mut flags: HashSet<LsFlags> = Self::parse_flags(args);
         let directory_paths: Vec<&str> = Self::parse_paths(args);
@@ -284,7 +283,7 @@ impl Command for LsCommand {
         let mut final_messages: Vec<String> = Vec::new();
 
         for path in directory_paths {
-            if let Some(target_entity) = ECSFileSystem::resolve_path(root_entity, world, path) {
+            if let Some(target_entity) = file_system.resolve_path(root_entity, path) {
                 queue.push_back((path.to_string(), target_entity));
             } else {
                 final_messages.push(format!(
@@ -299,12 +298,19 @@ impl Command for LsCommand {
                 continue;
             }
 
-            let entities_to_list: Vec<(String, Entity)> =
-                Self::gather_entities_to_list(&path, target_entity, &flags, world, &mut queue);
+            let entities_to_list: Vec<(String, Entity)> = Self::gather_entities_to_list(
+                &path,
+                target_entity,
+                &flags,
+                &file_system,
+                &mut queue,
+            );
 
             let output_lines: Vec<String> = entities_to_list
                 .into_iter()
-                .map(|(name, entity)| Self::format_single_entity(name, entity, &flags, world))
+                .map(|(name, entity)| {
+                    Self::format_single_entity(name, entity, &flags, &file_system)
+                })
                 .collect();
 
             let block_output: String = Self::format_directory_block(&path, output_lines, &flags);
@@ -318,23 +324,27 @@ impl Command for LsCommand {
             final_messages.push(all_directory_outputs.join("\n\n"));
         }
 
-        if !final_messages.is_empty() {
+        let result: CommandResult = if !final_messages.is_empty() {
             CommandResult::Handled(Some(final_messages.join("\n")))
         } else {
             CommandResult::Handled(None)
-        }
+        };
+        terminal.push_command_result(&result);
     }
 }
 
 pub struct CdCommand;
-
 impl CdCommand {
+    pub fn name() -> &'static str {
+        "cd"
+    }
+
     fn parse_target_path<'a>(args: &[&'a str]) -> Option<&'a str> {
         args.iter().find(|&&arg| !arg.starts_with('-')).copied()
     }
 
     fn compute_new_path(current_dir: &[String], target: &str) -> Vec<String> {
-        let mut new_path = if target.starts_with('/') {
+        let mut new_path: Vec<String> = if target.starts_with('/') {
             Vec::new()
         } else {
             current_dir.to_vec()
@@ -353,40 +363,38 @@ impl CdCommand {
         }
         new_path
     }
-}
 
-impl Command for CdCommand {
-    fn name() -> &'static str {
-        "cd"
-    }
+    pub fn execute(
+        input: In<Vec<String>>,
+        mut terminal: ResMut<Terminal>,
+        file_system: ECSFileSystem,
+    ) {
+        let args_vec: Vec<String> = input.0;
+        let args_refs: Vec<&str> = args_vec.iter().map(String::as_str).collect();
+        let args: &[&str] = &args_refs;
 
-    fn execute(world: &mut World, args: &[&str]) -> CommandResult {
-        let (root_entity, current_directory): (Entity, Vec<String>) = {
-            let terminal = world.resource::<Terminal>();
-            (terminal.root_entity, terminal.current_directory.clone())
-        };
+        let root_entity: Entity = terminal.root_entity;
+        let current_directory: Vec<String> = terminal.current_directory.clone();
 
         let target: &str = Self::parse_target_path(args).unwrap_or("/");
-
         let new_path: Vec<String> = Self::compute_new_path(&current_directory, target);
-        if let Some(target_entity) =
-            ECSFileSystem::resolve_path(root_entity, world, &new_path.join("/"))
+
+        let result: CommandResult = if let Some(target_entity) =
+            file_system.resolve_path(root_entity, &new_path.join("/"))
         {
-            let has_children = !ECSFileSystem::children(target_entity, world).is_empty();
+            let has_children: bool = !file_system.children(target_entity).is_empty();
 
             if !has_children {
-                return CommandResult::Handled(Some(format!("cd: {}: Not a directory", target)));
+                CommandResult::Handled(Some(format!("cd: {}: Not a directory", target)))
             } else {
-                world.resource_mut::<Terminal>().current_directory = new_path;
+                terminal.current_directory = new_path;
+                CommandResult::Handled(None)
             }
         } else {
-            return CommandResult::Handled(Some(format!(
-                "cd: {}: No such file or directory",
-                target
-            )));
-        }
+            CommandResult::Handled(Some(format!("cd: {}: No such file or directory", target)))
+        };
 
-        CommandResult::Handled(None)
+        terminal.push_command_result(&result);
     }
 }
 
@@ -408,18 +416,22 @@ impl CatFlags {
 
 pub struct CatCommand;
 impl CatCommand {
+    pub fn name() -> &'static str {
+        "cat"
+    }
+
     fn parse_flags(args: &[&str]) -> HashSet<CatFlags> {
         args.iter()
             .filter_map(|&arg: &&str| {
                 let mut arg_chars: Chars = arg.chars();
-                let c = arg_chars.next()?;
-                if c != '-' {
+                let character: char = arg_chars.next()?;
+                if character != '-' {
                     return None;
                 }
 
                 Some(
                     arg_chars
-                        .filter_map(|c: char| CatFlags::from_char(&c).ok())
+                        .filter_map(|char_item: char| CatFlags::from_char(&char_item).ok())
                         .collect::<HashSet<CatFlags>>(),
                 )
             })
@@ -440,11 +452,11 @@ impl CatCommand {
         }
 
         let mut output: Vec<String> = Vec::new();
-        for (i, line) in content.lines().enumerate() {
+        for (index, line) in content.lines().enumerate() {
             let mut formatted_line: String = String::new();
 
             if flags.contains(&CatFlags::NumberLines) {
-                formatted_line.push_str(&format!("{:>6}  ", i + 1));
+                formatted_line.push_str(&format!("{:>6}  ", index + 1));
             }
 
             formatted_line.push_str(line);
@@ -478,24 +490,29 @@ impl CatCommand {
         }
         parts.join("/")
     }
-}
 
-impl Command for CatCommand {
-    fn name() -> &'static str {
-        "cat"
-    }
+    pub fn execute(
+        input: In<Vec<String>>,
+        mut terminal: ResMut<Terminal>,
+        file_system: ECSFileSystem,
+        texts: Query<&Text>,
+        binaries: Query<&Binary>,
+    ) {
+        let args_vec: Vec<String> = input.0;
+        let args_refs: Vec<&str> = args_vec.iter().map(String::as_str).collect();
+        let args: &[&str] = &args_refs;
 
-    fn execute(world: &mut World, args: &[&str]) -> CommandResult {
-        let (root_entity, current_directory): (Entity, Vec<String>) = {
-            let terminal = world.resource::<Terminal>();
-            (terminal.root_entity, terminal.current_directory.clone())
-        };
+        let root_entity: Entity = terminal.root_entity;
+        let current_directory: Vec<String> = terminal.current_directory.clone();
 
         let flags: HashSet<CatFlags> = Self::parse_flags(args);
         let paths: Vec<&str> = Self::parse_paths(args);
 
         if paths.is_empty() {
-            return CommandResult::Handled(Some("cat: missing operand".to_string()));
+            let result: CommandResult =
+                CommandResult::Handled(Some("cat: missing operand".to_string()));
+            terminal.push_command_result(&result);
+            return;
         }
 
         let mut output_blocks: Vec<String> = Vec::new();
@@ -503,15 +520,13 @@ impl Command for CatCommand {
         for path in paths {
             let absolute_path: String = Self::build_absolute_path(&current_directory, path);
 
-            if let Some(target_entity) =
-                ECSFileSystem::resolve_path(root_entity, world, &absolute_path)
-            {
-                if let Some(text_comp) = world.get::<Text>(target_entity) {
+            if let Some(target_entity) = file_system.resolve_path(root_entity, &absolute_path) {
+                if let Ok(text_comp) = texts.get(target_entity) {
                     output_blocks.push(Self::format_content(&text_comp.text, &flags));
-                } else if world.get::<Binary>(target_entity).is_some() {
+                } else if binaries.get(target_entity).is_ok() {
                     output_blocks.push(format!("cat: {}: cannot display binary file", path));
                 } else {
-                    let children = ECSFileSystem::children(target_entity, world);
+                    let children: Vec<Entity> = file_system.children(target_entity);
                     if !children.is_empty() {
                         output_blocks.push(format!("cat: {}: Is a directory", path));
                     } else {
@@ -523,46 +538,46 @@ impl Command for CatCommand {
             }
         }
 
-        if !output_blocks.is_empty() {
+        let result: CommandResult = if !output_blocks.is_empty() {
             CommandResult::Handled(Some(output_blocks.join("\n")))
         } else {
             CommandResult::Handled(None)
-        }
+        };
+        terminal.push_command_result(&result);
     }
 }
 
 pub struct HelpCommand;
-impl Command for HelpCommand {
-    fn name() -> &'static str {
+impl HelpCommand {
+    pub fn name() -> &'static str {
         "help"
     }
-    fn execute(world: &mut World, _args: &[&str]) -> CommandResult {
-        let Some(registry): Option<&CommandRegistry> = world.get_resource::<CommandRegistry>()
-        else {
-            return CommandResult::Handled(Some(
-                "Error: CommandRegistry missing from World, ensure this is the cpu world"
-                    .to_string(),
-            ));
-        };
 
+    pub fn execute(
+        _input: In<Vec<String>>,
+        mut terminal: ResMut<Terminal>,
+        registry: Res<CommandRegistry>,
+    ) {
         let mut command_names: Vec<String> = registry.commands.keys().cloned().collect();
         command_names.sort();
 
-        CommandResult::Handled(Some(format!(
+        let result: CommandResult = CommandResult::Handled(Some(format!(
             "Available built-in commands: {}",
             command_names.join(", ")
-        )))
+        )));
+        terminal.push_command_result(&result);
     }
 }
 
 pub struct RookCommand;
-impl Command for RookCommand {
-    fn name() -> &'static str {
+impl RookCommand {
+    pub fn name() -> &'static str {
         "rook"
     }
 
-    fn execute(_world: &mut World, _args: &[&str]) -> CommandResult {
+    pub fn execute(_input: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
         let colored_icon: String = format!("\x1b[96m{}\x1b[0m", crate::style_sheet::ICON);
-        CommandResult::Handled(Some(colored_icon))
+        let result: CommandResult = CommandResult::Handled(Some(colored_icon));
+        terminal.push_command_result(&result);
     }
 }

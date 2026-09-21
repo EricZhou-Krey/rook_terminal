@@ -1,26 +1,22 @@
 use bevy_ecs::{
     entity::Entity,
-    schedule::Schedule,
     world::{Mut, World},
 };
 use rook_terminal::{
-    command::{Command, CommandResult, HelpCommand},
+    command::HelpCommand,
     file_system::{Binary, Text, VFSChildren, VFSName},
-    Terminal, TerminalScheduleExtension, TerminalWorldExtension,
+    Terminal, TerminalCommandEvent, TerminalWorldExtension,
 };
 
 pub struct TerminalApp {
     pub world: World,
-    pub schedule: Schedule,
 }
 
 impl TerminalApp {
     pub fn example() -> Self {
-        let mut world = World::new();
-        let mut schedule: Schedule = Schedule::default();
+        let mut world: World = World::new();
 
         world.setup_terminal();
-        schedule.setup_terminal();
 
         let test_text: Entity = world
             .spawn((
@@ -61,32 +57,32 @@ impl TerminalApp {
             vfs_children.children.push(test_directory);
         }
 
-        let command_result: CommandResult = HelpCommand::execute(&mut world, &[]);
-        world
-            .resource_mut::<Terminal>()
-            .push_command_result(&command_result);
+        world.trigger(TerminalCommandEvent {
+            raw_command: HelpCommand::name().to_string(),
+        });
+        world.flush();
 
-        Self { world, schedule }
+        Self { world }
     }
 }
 
 impl eframe::App for TerminalApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.world
-                .resource_scope(|_world: &mut World, mut terminal: Mut<Terminal>| {
-                    terminal.ui(ui);
-                });
-        });
-    }
+        egui::CentralPanel::default().show(ui, |ui: &mut egui::Ui| {
+            let pending_event: Option<TerminalCommandEvent> = self
+                .world
+                .resource_scope(|_world: &mut World, mut terminal: Mut<Terminal>| terminal.ui(ui));
 
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.schedule.run(&mut self.world);
+            if let Some(event) = pending_event {
+                self.world.trigger(event);
+                self.world.flush();
+            }
+        });
     }
 }
 
 fn main() -> eframe::Result {
-    let native_options = eframe::NativeOptions {
+    let native_options: eframe::NativeOptions = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_maximized(true),
         ..Default::default()
     };
@@ -94,6 +90,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "egui-experiments",
         native_options,
-        Box::new(|_cc| Ok(Box::new(TerminalApp::example()))),
+        Box::new(|_creation_context: &eframe::CreationContext| {
+            Ok(Box::new(TerminalApp::example()))
+        }),
     )
 }
