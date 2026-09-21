@@ -16,7 +16,7 @@ impl ClearCommand {
     pub fn name() -> &'static str {
         "clear"
     }
-    pub fn execute(_input: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
+    pub fn execute(_args: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
         terminal.history.clear();
         terminal.push_command_result(&CommandResult::Handled(None));
     }
@@ -27,7 +27,7 @@ impl PwdCommand {
     pub fn name() -> &'static str {
         "pwd"
     }
-    pub fn execute(_input: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
+    pub fn execute(_args: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
         let path: String = format!("/{}", terminal.current_directory.join("/"));
         terminal.push_command_result(&CommandResult::Handled(Some(path)));
     }
@@ -259,11 +259,11 @@ impl LsCommand {
     }
 
     pub fn execute(
-        input: In<Vec<String>>,
+        args: In<Vec<String>>,
         mut terminal: ResMut<Terminal>,
         file_system: ECSFileSystem,
     ) {
-        let args_vec: Vec<String> = input.0;
+        let args_vec: Vec<String> = args.0;
         let args_refs: Vec<&str> = args_vec.iter().map(String::as_str).collect();
         let args: &[&str] = &args_refs;
 
@@ -365,11 +365,11 @@ impl CdCommand {
     }
 
     pub fn execute(
-        input: In<Vec<String>>,
+        args: In<Vec<String>>,
         mut terminal: ResMut<Terminal>,
         file_system: ECSFileSystem,
     ) {
-        let args_vec: Vec<String> = input.0;
+        let args_vec: Vec<String> = args.0;
         let args_refs: Vec<&str> = args_vec.iter().map(String::as_str).collect();
         let args: &[&str] = &args_refs;
 
@@ -492,13 +492,13 @@ impl CatCommand {
     }
 
     pub fn execute(
-        input: In<Vec<String>>,
+        args: In<Vec<String>>,
         mut terminal: ResMut<Terminal>,
         file_system: ECSFileSystem,
         texts: Query<&Text>,
         binaries: Query<&Binary>,
     ) {
-        let args_vec: Vec<String> = input.0;
+        let args_vec: Vec<String> = args.0;
         let args_refs: Vec<&str> = args_vec.iter().map(String::as_str).collect();
         let args: &[&str] = &args_refs;
 
@@ -554,7 +554,7 @@ impl HelpCommand {
     }
 
     pub fn execute(
-        _input: In<Vec<String>>,
+        _args: In<Vec<String>>,
         mut terminal: ResMut<Terminal>,
         registry: Res<CommandRegistry>,
     ) {
@@ -575,7 +575,7 @@ impl RookCommand {
         "rook"
     }
 
-    pub fn execute(_input: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
+    pub fn execute(_args: In<Vec<String>>, mut terminal: ResMut<Terminal>) {
         let colored_icon: String = format!("\x1b[96m{}\x1b[0m", crate::style_sheet::ICON);
         let result: CommandResult = CommandResult::Handled(Some(colored_icon));
         terminal.push_command_result(&result);
