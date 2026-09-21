@@ -1,4 +1,4 @@
-use bevy_ecs::{prelude::*, system::{Commands, Res, ResMut}, relationship::RelationshipSourceCollection};
+use bevy_ecs::{entity_disabling::DefaultQueryFilters, prelude::*, relationship::RelationshipSourceCollection, system::{Commands, Res, ResMut, SystemIdMarker}};
 use egui::{Color32, TextStyle};
 use crate::{
     command::{CatCommand, CdCommand, ClearCommand, CommandResult, HelpCommand, LsCommand, PwdCommand, RookCommand}, file_system::{CommandRegistry, VFSChildren, VFSFilterExtension, VFSName, VFSQueryChildren}, style_sheet::{
@@ -284,32 +284,67 @@ impl TerminalWorldExtension for World {
                 },
             ))
             .id();
+
+        let vfs_files_directory: Entity = self
+            .spawn((
+                VFSName {
+                    name: "vfs_files".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: self.filter::<VFSName>(),
+                }
+            ))
+            .id();
+
+        let vfs_internals_directory: Entity = self
+            .spawn((
+                VFSName {
+                    name: "vfs_internal".to_string(),
+                },
+                VFSQueryChildren {
+                    filter: self.filter::<CommandRegistry>() | self.filter::<Terminal>(),
+                }
+            ))
+            .id();
         
         let vfs_entities_directory: Entity = self
             .spawn((
                 VFSName {
                     name: ".vfs_entities".to_string(),
                 },
+                VFSChildren {
+                    children: vec![vfs_files_directory, vfs_internals_directory]
+                }
+            ))
+            .id();
+
+        let bevy_entities: Entity = self
+            .spawn((
+                VFSName {
+                    name: ".bevy_entities".to_string(),
+                },
                 VFSQueryChildren {
-                    filter: self.filter::<VFSName>() | self.filter::<CommandRegistry>() | self.filter::<Terminal>(),
+                    filter: self.filter::<DefaultQueryFilters>() | self.filter::<Observer>() | self.filter::<SystemIdMarker>()
                 }
             ))
             .id();
         
-        let non_vfs_entities_directory: Entity = self
+        let app_entities_directory: Entity = self
             .spawn((
                 VFSName {
                     name: ".app_entities".to_string(),
                 },
                 VFSQueryChildren {
-                    filter: !(self.filter::<VFSName>() | self.filter::<CommandRegistry>() | self.filter::<Terminal>()),
+                    filter: !(self.filter::<VFSName>() | self.filter::<CommandRegistry>() | self.filter::<Terminal>() |
+                        self.filter::<DefaultQueryFilters>() | self.filter::<Observer>() | self.filter::<SystemIdMarker>()),
                 }
             ))
             .id();
 
+
         let root_entity: Entity = self.spawn((
             VFSName { name: "root".to_string() },
-            VFSChildren { children: vec![entities_directory, vfs_entities_directory, non_vfs_entities_directory] },
+            VFSChildren { children: vec![entities_directory, bevy_entities, vfs_entities_directory, app_entities_directory] },
         )).id();
 
         let terminal: Terminal = Terminal::new(root_entity);
