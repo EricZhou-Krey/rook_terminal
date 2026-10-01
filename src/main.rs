@@ -4,8 +4,9 @@ use bevy_ecs::{
 };
 use rook_terminal::{
     command::HelpCommand,
+    event::TerminalCommandRequested,
     file_system::{Binary, Text, VFSChildren, VFSName},
-    Terminal, TerminalCommandEvent, TerminalWorldExtension,
+    TerminalInputState, TerminalSession, TerminalViewState, TerminalWorldExtension,
 };
 
 pub struct TerminalApp {
@@ -51,13 +52,13 @@ impl TerminalApp {
             ))
             .id();
 
-        let root_entity: Entity = world.resource::<Terminal>().root_entity;
+        let root_entity: Entity = world.resource::<TerminalSession>().root_entity;
 
         if let Some(mut vfs_children) = world.get_mut::<VFSChildren>(root_entity) {
             vfs_children.children.push(test_directory);
         }
 
-        world.trigger(TerminalCommandEvent {
+        world.trigger(TerminalCommandRequested {
             raw_command: HelpCommand::name().to_string(),
         });
         world.flush();
@@ -69,9 +70,18 @@ impl TerminalApp {
 impl eframe::App for TerminalApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui: &mut egui::Ui| {
-            let pending_event: Option<TerminalCommandEvent> = self
-                .world
-                .resource_scope(|_world: &mut World, mut terminal: Mut<Terminal>| terminal.ui(ui));
+            let pending_event: Option<TerminalCommandRequested> = self.world.resource_scope(
+                |world: &mut World, mut terminal: Mut<TerminalSession>| {
+                    world.resource_scope(
+                        |world: &mut World, mut input_state: Mut<TerminalInputState>| {
+                            let view_state: &TerminalViewState =
+                                world.resource::<TerminalViewState>();
+
+                            terminal.ui(&mut input_state, view_state, ui)
+                        },
+                    )
+                },
+            );
 
             if let Some(event) = pending_event {
                 self.world.trigger(event);
